@@ -22,30 +22,37 @@ from datetime import datetime
 import time
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import threading
+import sys
 
 # ==============================================
 # CONFIG
 # ==============================================
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "8961056279:AAHOiUU3W9dVSIMIlIA_F2PEwbwCZ99KqsE")
-PORT = int(os.environ.get("PORT", 8080))
+PORT = int(os.environ.get("PORT", 10000))
 
 logging.basicConfig(format='%(asctime)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # ==============================================
-# HEALTH CHECK SERVER (Render ke liye)
+# HEALTH CHECK SERVER
 # ==============================================
 class HealthHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
         self.send_header('Content-type', 'application/json')
         self.end_headers()
-        self.wfile.write(json.dumps({"status": "running", "bot": "INFO_BOT"}).encode())
+        self.wfile.write(json.dumps({"status": "running"}).encode())
+    
+    def log_message(self, format, *args):
+        pass
 
 def start_health_server():
-    server = HTTPServer(('0.0.0.0', PORT), HealthHandler)
-    logger.info(f"Health server on port {PORT}")
-    server.serve_forever()
+    try:
+        server = HTTPServer(('0.0.0.0', PORT), HealthHandler)
+        logger.info(f"Health server on port {PORT}")
+        server.serve_forever()
+    except Exception as e:
+        logger.error(f"Health server error: {e}")
 
 # ==============================================
 # STATES
@@ -56,7 +63,7 @@ def start_health_server():
 # HELPERS
 # ==============================================
 def safe_request(url, timeout=15):
-    h = {"User-Agent": "Mozilla/5.0 (Linux; Android 10) Chrome/120.0.0.0"}
+    h = {"User-Agent": "Mozilla/5.0"}
     for i in range(2):
         try:
             return requests.get(url, headers=h, timeout=timeout)
@@ -216,11 +223,9 @@ async def handle_pin(update, context):
     r = await get_pin_info(p)
     await m.delete()
     
-    # Summary
     s = {"status": r.get("status"), "pincode": r.get("pincode"), "total": r.get("total"), "summary": r.get("summary"), "location": r.get("location"), "powered_by": r.get("powered_by")}
     await update.message.reply_text(f"📮 *SUMMARY*\n{fmt(s)}", parse_mode='Markdown')
     
-    # All offices in chunks
     offices = r.get("post_offices", [])
     if offices:
         for i in range(0, len(offices), 5):
@@ -268,31 +273,41 @@ async def cancel(update, context):
 # MAIN
 # ==============================================
 def main():
-    # Start health server in background
-    threading.Thread(target=start_health_server, daemon=True).start()
+    print("Starting bot...", flush=True)
     
-    app = Application.builder().token(BOT_TOKEN).build()
+    # Start health server
+    health_thread = threading.Thread(target=start_health_server, daemon=True)
+    health_thread.start()
+    print(f"Health server started on port {PORT}", flush=True)
     
-    conv = ConversationHandler(
-        entry_points=[CallbackQueryHandler(button)],
-        states={
-            IP_INPUT: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_ip)],
-            PIN_INPUT: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_pin)],
-            IFSC_INPUT: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_ifsc)],
-            VEHICLE_INPUT: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_vehicle)],
-        },
-        fallbacks=[CommandHandler('cancel', cancel)],
-    )
+    # Check token
+    if not BOT_TOKEN or BOT_TOKEN == "YOUR_BOT_TOKEN":
+        print("ERROR: BOT_TOKEN not set!", flush=True)
+        sys.exit(1)
     
-    app.add_handler(CommandHandler('start', start))
-    app.add_handler(CommandHandler('menu', menu))
-    app.add_handler(conv)
-    
-    logger.info("Bot starting...")
-    print("=" * 40)
-    print("🔍 BOT RUNNING")
-    print("=" * 40)
-    app.run_polling(allowed_updates=Update.ALL_TYPES)
+    try:
+        app = Application.builder().token(BOT_TOKEN).build()
+        
+        conv = ConversationHandler(
+            entry_points=[CallbackQueryHandler(button)],
+            states={
+                IP_INPUT: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_ip)],
+                PIN_INPUT: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_pin)],
+                IFSC_INPUT: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_ifsc)],
+                VEHICLE_INPUT: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_vehicle)],
+            },
+            fallbacks=[CommandHandler('cancel', cancel)],
+        )
+        
+        app.add_handler(CommandHandler('start', start))
+        app.add_handler(CommandHandler('menu', menu))
+        app.add_handler(conv)
+        
+        print("Bot is running...", flush=True)
+        app.run_polling(allowed_updates=Update.ALL_TYPES)
+    except Exception as e:
+        print(f"Error: {e}", flush=True)
+        sys.exit(1)
 
 if __name__ == "__main__":
     main()
