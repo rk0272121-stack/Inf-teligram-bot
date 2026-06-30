@@ -7,6 +7,7 @@ import json
 import os
 import socket
 import re
+import asyncio
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application,
@@ -24,25 +25,20 @@ from http.server import HTTPServer, BaseHTTPRequestHandler
 import threading
 import sys
 
-# ==============================================
 # CONFIG
-# ==============================================
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "8961056279:AAHOiUU3W9dVSIMIlIA_F2PEwbwCZ99KqsE")
 PORT = int(os.environ.get("PORT", 10000))
 
 logging.basicConfig(format='%(asctime)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# ==============================================
 # HEALTH CHECK SERVER
-# ==============================================
 class HealthHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
         self.send_header('Content-type', 'application/json')
         self.end_headers()
         self.wfile.write(json.dumps({"status": "running"}).encode())
-    
     def log_message(self, format, *args):
         pass
 
@@ -54,14 +50,10 @@ def start_health_server():
     except Exception as e:
         logger.error(f"Health server error: {e}")
 
-# ==============================================
 # STATES
-# ==============================================
 (IP_INPUT, PIN_INPUT, IFSC_INPUT, VEHICLE_INPUT) = range(4)
 
-# ==============================================
 # HELPERS
-# ==============================================
 def safe_request(url, timeout=15):
     h = {"User-Agent": "Mozilla/5.0"}
     for i in range(2):
@@ -74,10 +66,7 @@ def safe_request(url, timeout=15):
 def fmt(data):
     return f"```json\n{json.dumps(data, indent=2, ensure_ascii=False)}\n```"
 
-# ==============================================
 # API FUNCTIONS
-# ==============================================
-
 async def get_ip_info(ip):
     result = {"status": "success", "query_ip": ip, "powered_by": "NEUTRONNNN_KILLER"}
     try:
@@ -85,7 +74,7 @@ async def get_ip_info(ip):
         d = r.json()
         if d.get('status') == 'success':
             result["location"] = {"ip": d.get('query'), "country": d.get('country'), "region": d.get('regionName'), "city": d.get('city'), "zip": d.get('zip'), "timezone": d.get('timezone')}
-            result["coordinates"] = {"latitude": d.get('lat'), "longitude": d.get('lon'), "google_maps": f"https://maps.google.com/?q={d.get('lat')},{d.get('lon')}"}
+            result["coordinates"] = {"lat": d.get('lat'), "lon": d.get('lon'), "maps": f"https://maps.google.com/?q={d.get('lat')},{d.get('lon')}"}
             result["network"] = {"isp": d.get('isp'), "org": d.get('org'), "as": d.get('as')}
             result["flags"] = {"mobile": d.get('mobile'), "proxy": d.get('proxy'), "hosting": d.get('hosting')}
         else:
@@ -170,25 +159,22 @@ async def get_vehicle_info(rc):
         result = {"status": "error", "message": str(e)}
     return result
 
-# ==============================================
 # BOT HANDLERS
-# ==============================================
-
-async def start(update, context):
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     kb = [[InlineKeyboardButton("🌐 IP Info", callback_data='ip')],
           [InlineKeyboardButton("📮 PIN Info", callback_data='pin')],
           [InlineKeyboardButton("🏦 IFSC Info", callback_data='ifsc')],
           [InlineKeyboardButton("🚗 Vehicle Info", callback_data='vehicle')]]
     await update.message.reply_text("🔍 *INFO GATHERING BOT*\n\n🌐 IP | 📮 PIN | 🏦 IFSC | 🚗 Vehicle\n\n👇 Select:", reply_markup=InlineKeyboardMarkup(kb), parse_mode='Markdown')
 
-async def menu(update, context):
+async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     kb = [[InlineKeyboardButton("🌐 IP", callback_data='ip')],
           [InlineKeyboardButton("📮 PIN", callback_data='pin')],
           [InlineKeyboardButton("🏦 IFSC", callback_data='ifsc')],
           [InlineKeyboardButton("🚗 Vehicle", callback_data='vehicle')]]
     await update.message.reply_text("🔍 *Select:*", reply_markup=InlineKeyboardMarkup(kb), parse_mode='Markdown')
 
-async def button(update, context):
+async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
     msgs = {'ip': ("🌐 *Enter IP/Domain:*\n`8.8.8.8`", IP_INPUT),
@@ -199,7 +185,7 @@ async def button(update, context):
         await q.edit_message_text(msgs[q.data][0], parse_mode='Markdown')
         return msgs[q.data][1]
 
-async def handle_ip(update, context):
+async def handle_ip(update: Update, context: ContextTypes.DEFAULT_TYPE):
     u = update.message.text.strip()
     if not re.match(r'^\d+\.\d+\.\d+\.\d+$', u):
         try:
@@ -214,7 +200,7 @@ async def handle_ip(update, context):
     await menu(update, context)
     return ConversationHandler.END
 
-async def handle_pin(update, context):
+async def handle_pin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     p = update.message.text.strip()
     if not p.isdigit() or len(p) != 6:
         await update.message.reply_text("❌ 6 digits!")
@@ -222,10 +208,8 @@ async def handle_pin(update, context):
     m = await update.message.reply_text("🔍 Fetching...")
     r = await get_pin_info(p)
     await m.delete()
-    
     s = {"status": r.get("status"), "pincode": r.get("pincode"), "total": r.get("total"), "summary": r.get("summary"), "location": r.get("location"), "powered_by": r.get("powered_by")}
     await update.message.reply_text(f"📮 *SUMMARY*\n{fmt(s)}", parse_mode='Markdown')
-    
     offices = r.get("post_offices", [])
     if offices:
         for i in range(0, len(offices), 5):
@@ -236,11 +220,10 @@ async def handle_pin(update, context):
             if cn == tc:
                 cd["note"] = f"Total {len(offices)} offices shown."
             await update.message.reply_text(f"📮 *OFFICES ({cn}/{tc})*\n{fmt(cd)}", parse_mode='Markdown')
-    
     await menu(update, context)
     return ConversationHandler.END
 
-async def handle_ifsc(update, context):
+async def handle_ifsc(update: Update, context: ContextTypes.DEFAULT_TYPE):
     i = update.message.text.strip().upper()
     if len(i) != 11:
         await update.message.reply_text("❌ 11 chars!")
@@ -252,7 +235,7 @@ async def handle_ifsc(update, context):
     await menu(update, context)
     return ConversationHandler.END
 
-async def handle_vehicle(update, context):
+async def handle_vehicle(update: Update, context: ContextTypes.DEFAULT_TYPE):
     v = update.message.text.strip().upper()
     if len(v) < 8:
         await update.message.reply_text("❌ Invalid!")
@@ -264,50 +247,36 @@ async def handle_vehicle(update, context):
     await menu(update, context)
     return ConversationHandler.END
 
-async def cancel(update, context):
+async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("❌ Cancelled.")
     await menu(update, context)
     return ConversationHandler.END
 
-# ==============================================
 # MAIN
-# ==============================================
 def main():
     print("Starting bot...", flush=True)
-    
-    # Start health server
     health_thread = threading.Thread(target=start_health_server, daemon=True)
     health_thread.start()
-    print(f"Health server started on port {PORT}", flush=True)
     
-    # Check token
-    if not BOT_TOKEN or BOT_TOKEN == "YOUR_BOT_TOKEN":
-        print("ERROR: BOT_TOKEN not set!", flush=True)
-        sys.exit(1)
+    app = Application.builder().token(BOT_TOKEN).build()
     
-    try:
-        app = Application.builder().token(BOT_TOKEN).build()
-        
-        conv = ConversationHandler(
-            entry_points=[CallbackQueryHandler(button)],
-            states={
-                IP_INPUT: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_ip)],
-                PIN_INPUT: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_pin)],
-                IFSC_INPUT: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_ifsc)],
-                VEHICLE_INPUT: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_vehicle)],
-            },
-            fallbacks=[CommandHandler('cancel', cancel)],
-        )
-        
-        app.add_handler(CommandHandler('start', start))
-        app.add_handler(CommandHandler('menu', menu))
-        app.add_handler(conv)
-        
-        print("Bot is running...", flush=True)
-        app.run_polling(allowed_updates=Update.ALL_TYPES)
-    except Exception as e:
-        print(f"Error: {e}", flush=True)
-        sys.exit(1)
+    conv = ConversationHandler(
+        entry_points=[CallbackQueryHandler(button)],
+        states={
+            IP_INPUT: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_ip)],
+            PIN_INPUT: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_pin)],
+            IFSC_INPUT: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_ifsc)],
+            VEHICLE_INPUT: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_vehicle)],
+        },
+        fallbacks=[CommandHandler('cancel', cancel)],
+    )
+    
+    app.add_handler(CommandHandler('start', start))
+    app.add_handler(CommandHandler('menu', menu))
+    app.add_handler(conv)
+    
+    print("Bot running...", flush=True)
+    app.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
 
 if __name__ == "__main__":
     main()
